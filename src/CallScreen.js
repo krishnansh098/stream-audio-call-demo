@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Share,
   StyleSheet,
@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { useCall, useCallStateHooks } from '@stream-io/video-react-native-sdk';
+import { codeFromCallId } from './utils';
 
 function Avatar({ name, speaking }) {
   const initial = (name || '?').charAt(0).toUpperCase();
@@ -18,23 +19,36 @@ function Avatar({ name, speaking }) {
   );
 }
 
-export default function CallScreen({ code, onLeft }) {
+// Shared in-call UI for BOTH the code flow and the ring flow. The 6-char code
+// card only shows for code-based calls (ids prefixed "audio-"); ring calls have
+// no shareable code so it's hidden.
+export default function CallScreen({ onLeft }) {
   const call = useCall();
   const { useParticipants, useMicrophoneState } = useCallStateHooks();
   const participants = useParticipants();
   const { isMute } = useMicrophoneState();
   const [copied, setCopied] = useState(false);
 
+  const code = codeFromCallId(call?.id);
+
+  // Audio-only: make sure the camera never publishes, whichever flow we came
+  // from (the ring flow auto-joins, so this is the reliable place to enforce it).
+  useEffect(() => {
+    call?.camera?.disable().catch(() => {});
+  }, [call]);
+
   const local = participants.find((p) => p.isLocalParticipant);
   const remote = participants.find((p) => !p.isLocalParticipant);
 
   const copyCode = async () => {
+    if (!code) return;
     await Clipboard.setStringAsync(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
 
   const shareCode = async () => {
+    if (!code) return;
     try {
       await Share.share({
         message: `Join my audio call! Open the app and enter code: ${code}`,
@@ -58,27 +72,34 @@ export default function CallScreen({ code, onLeft }) {
     } catch (e) {
       console.warn('Failed to leave call', e);
     } finally {
-      onLeft();
+      onLeft?.();
     }
   };
 
   return (
     <View style={styles.container}>
-      {/* Call code banner */}
-      <View style={styles.codeCard}>
-        <Text style={styles.codeLabel}>CALL CODE</Text>
-        <Text style={styles.codeValue}>{code}</Text>
-        <View style={styles.codeActions}>
-          <TouchableOpacity style={styles.codeButton} onPress={copyCode}>
-            <Text style={styles.codeButtonText}>
-              {copied ? 'Copied!' : 'Copy'}
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.codeButton} onPress={shareCode}>
-            <Text style={styles.codeButtonText}>Share</Text>
-          </TouchableOpacity>
+      {/* Call code banner (code calls only) */}
+      {code ? (
+        <View style={styles.codeCard}>
+          <Text style={styles.codeLabel}>CALL CODE</Text>
+          <Text style={styles.codeValue}>{code}</Text>
+          <View style={styles.codeActions}>
+            <TouchableOpacity style={styles.codeButton} onPress={copyCode}>
+              <Text style={styles.codeButtonText}>
+                {copied ? 'Copied!' : 'Copy'}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.codeButton} onPress={shareCode}>
+              <Text style={styles.codeButtonText}>Share</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      ) : (
+        <View style={styles.codeCard}>
+          <Text style={styles.codeLabel}>AUDIO CALL</Text>
+          <Text style={styles.directTitle}>Connected</Text>
+        </View>
+      )}
 
       {/* Participants */}
       <View style={styles.participants}>
@@ -109,7 +130,7 @@ export default function CallScreen({ code, onLeft }) {
               <Text style={styles.avatarText}>...</Text>
             </View>
             <Text style={styles.waitingText}>
-              Waiting for the other person...{'\n'}Share the code above.
+              Waiting for the other person...
             </Text>
           </View>
         )}
@@ -150,6 +171,12 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 8,
     marginVertical: 8,
+  },
+  directTitle: {
+    color: '#f9fafb',
+    fontSize: 22,
+    fontWeight: '700',
+    marginTop: 6,
   },
   codeActions: { flexDirection: 'row', gap: 12 },
   codeButton: {

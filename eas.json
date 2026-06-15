@@ -8,16 +8,25 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt" }
+      "env": {
+        "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt",
+        "EXPO_PUBLIC_API_URL": "https://scoff-corny-navigate.ngrok-free.dev"
+      }
     },
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt" }
+      "env": {
+        "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt",
+        "EXPO_PUBLIC_API_URL": "https://scoff-corny-navigate.ngrok-free.dev"
+      }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt" }
+      "env": {
+        "EXPO_PUBLIC_STREAM_API_KEY": "qrp6sc4qxppt",
+        "EXPO_PUBLIC_API_URL": "https://your-deployed-server.example.com"
+      }
     }
   },
   "submit": { "production": {} }

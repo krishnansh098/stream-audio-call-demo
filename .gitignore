@@ -34,6 +34,12 @@ yarn-error.*
 .env
 .env*.local
 
+# Firebase (per-project; see SETUP.md).
+# NOTE: google-services.json is intentionally NOT ignored so EAS Build includes
+# it in the upload (EAS skips gitignored files). If you make the repo public and
+# want it out of git, switch to an EAS file secret - see SETUP.md section D.
+GoogleService-Info.plist
+
 # typescript
 *.tsbuildinfo
 

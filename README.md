@@ -1,54 +1,86 @@
 # Stream Audio Call Demo
 
-A small 1-to-1 audio calling app built with Expo and the Stream Video React Native SDK.
-You pick a name, start a call, and share the 6-character code so someone else can join.
-Audio only, capped at 2 participants per call.
+A 1-to-1 audio calling app built with Expo and the Stream Video React Native SDK.
+Three ways to connect, all ending in the same audio-only call (max 2 people):
+
+1. **Call by ID** — register to get a unique 3-digit ID, type someone's ID and it
+   **rings their phone** (foreground, background, or killed via push notifications).
+2. **Start a Call** — create a call and share a 6-character code.
+3. **Join with Code** — enter a code someone shared.
 
 ## Stack
 
-- Expo SDK 56 (dev client / EAS Build - not Expo Go, since it uses native WebRTC)
-- @stream-io/video-react-native-sdk
-- @stream-io/react-native-webrtc
+- Expo SDK 56 (dev client / EAS Build - **not** Expo Go, it uses native modules)
+- `@stream-io/video-react-native-sdk` + `@stream-io/react-native-webrtc`
+- `@stream-io/react-native-callingx` + `@react-native-firebase/*` for ringing push
+- A small Express directory/token service in [`server/`](server/)
+
+## How it fits together
+
+```
+phone  ──register/lookup/token──►  server (Express)  ──mints real tokens──►  Stream
+  │                                                                            ▲
+  └────────────────────────  Stream Video SDK (calls, ringing)  ──────────────┘
+```
+
+- The **server** assigns each email a stable 3-digit ID, maps it to a Stream user
+  id `user-<id>`, and mints **real** Stream tokens with the API secret (so you can
+  turn off "Disable Auth Checks"). The secret never ships in the app.
+- The app persists `{id, name, email}` with AsyncStorage, so you stay logged in and
+  keep the same ID across restarts.
+- Ringing uses Stream's ring flow; an app-level `useCalls()` watcher shows the
+  incoming/outgoing UI over any screen, and FCM push (callingx) handles the
+  killed-state full-screen incoming call.
 
 ## Setup
 
 ```bash
+# 1. App deps
 npm install
-cp .env.example .env   # then put your Stream API key in it
+cp .env.example .env        # set EXPO_PUBLIC_STREAM_API_KEY + EXPO_PUBLIC_API_URL
+
+# 2. Server
+cd server
+npm install
+cp .env.example .env        # set STREAM_API_KEY + STREAM_API_SECRET
+npm start                   # listens on :3000, prints the LAN URL to use
 ```
 
-You need a Stream Video app from https://dashboard.getstream.io. For this demo the
-client generates a development token locally, which only works while "Disable Auth
-Checks" is turned on for your app in the dashboard. Don't ship that to production -
-generate tokens on your own backend with the API secret instead.
+`EXPO_PUBLIC_API_URL` must be your computer's **LAN IP** (e.g.
+`http://192.168.1.20:3000`) for on-device testing — not `localhost`. It's baked
+into the build, so rebuild if you change it.
 
-Set the key in two places:
-- `.env` -> `EXPO_PUBLIC_STREAM_API_KEY` for local development
-- `eas.json` env blocks for EAS builds
+For background / killed-state **push ringing**, follow [SETUP.md](SETUP.md) (Firebase
+project + Stream push provider — the manual dashboard steps). The app builds and
+rings while open without it.
 
-## Running
+## Build & run
 
 ```bash
-# Android build you can install on a device/emulator
 eas build --profile preview --platform android
 ```
 
-Once installed, open it on two devices: start a call on one, copy the code, enter it
-on the other.
+Then follow [TESTING.md](TESTING.md) for the 2-device test script.
 
 ## Project layout
 
 ```
-App.js              screens + Stream client wiring (login / home / call)
-src/HomeScreen.js   start or join a call
-src/CallScreen.js   in-call UI, mute, leave, share code
-src/devToken.js     local dev-token generator (demo only)
-src/utils.js        call-code + user-id helpers
+App.js                 boot/auth, Stream client (tokenProvider), the 3 call entry points
+index.js               push config (StreamVideoRN.setPushConfig) - runs before the app
+src/LoginScreen.js     name + email registration
+src/HomeScreen.js      the 3 sections: Call by ID / Start a Call / Join with Code
+src/CallController.js  app-wide ringing watcher (incoming/outgoing/busy) + in-call routing
+src/CallScreen.js      shared in-call UI (mute, leave, code card for code calls)
+src/api.js             client for the directory service
+src/storage.js         AsyncStorage persistence of the logged-in user
+src/utils.js           call-code / call-id helpers, validators
+server/                Express directory + token service
 ```
 
 ## Notes
 
-- The call is forced audio-only: the camera is disabled right after joining and
-  `mic_default_on` is set in the call settings.
-- `max_participants` is set to 2 on the server side, with a client-side guard before
-  joining so a third person gets a "call is full" message.
+- Audio-only: the camera is disabled on entering any call and `mic_default_on` is
+  set; `max_participants` is 2 (server-side) with a client-side guard for code joins.
+- Both ring calls and code calls render the same `CallScreen`.
+- Busy: an incoming ring while you're already in a call is auto-declined and the
+  caller sees "User is busy".

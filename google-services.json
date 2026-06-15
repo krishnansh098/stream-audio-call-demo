@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "404120872199",
+    "project_id": "stream-call-demo",
+    "storage_bucket": "stream-call-demo.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:404120872199:android:7ff6761c5794dfe84bd1a2",
+        "android_client_info": {
+          "package_name": "com.demo.streamcall"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBtUG0zp9l_Aoqc7ImXOub7c7CuYFpLdGM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

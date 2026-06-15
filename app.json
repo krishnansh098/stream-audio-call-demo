@@ -7,6 +7,7 @@
     "userInterfaceStyle": "dark",
     "android": {
       "package": "com.demo.streamcall",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.BLUETOOTH",
         "android.permission.BLUETOOTH_CONNECT",
@@ -17,8 +18,15 @@
         "android.permission.INTERNET",
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.RECORD_AUDIO",
-        "android.permission.SYSTEM_ALERT_WINDOW"
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.USE_FULL_SCREEN_INTENT",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_PHONE_CALL"
       ]
+    },
+    "ios": {
+      "bundleIdentifier": "com.demo.streamcall"
     },
     "plugins": [
       [
@@ -26,17 +34,28 @@
         {
           "android": {
             "minSdkVersion": 24
+          },
+          "ios": {
+            "useFrameworks": "static"
           }
         }
       ],
-      "@stream-io/video-react-native-sdk",
+      [
+        "@stream-io/video-react-native-sdk",
+        {
+          "androidKeepCallAlive": true,
+          "enableNonRingingPushNotifications": false
+        }
+      ],
       [
         "@config-plugins/react-native-webrtc",
         {
           "cameraPermission": "$(PRODUCT_NAME) requires camera access to transmit video",
           "microphonePermission": "$(PRODUCT_NAME) requires microphone access to transmit audio during calls"
         }
-      ]
+      ],
+      "@react-native-firebase/app",
+      "@react-native-firebase/messaging"
     ],
     "extra": {
       "eas": {

@@ -1,90 +1,165 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   SafeAreaView,
   StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
+  View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import {
-  StreamCall,
   StreamVideo,
   StreamVideoClient,
 } from '@stream-io/video-react-native-sdk';
 
-import HomeScreen from './src/HomeScreen';
-import CallScreen from './src/CallScreen';
-import { createDevToken } from './src/devToken';
-import { codeToCallId, generateCallCode, nameToUserId } from './src/utils';
+import LoginScreen from './src/LoginScreen';
+import CallController from './src/CallController';
+import * as api from './src/api';
+import { loadUser, saveUser, loadApiUrl, saveApiUrl } from './src/storage';
+import {
+  codeToCallId,
+  generateCallCode,
+  randomRingCallId,
+} from './src/utils';
 
 const API_KEY = process.env.EXPO_PUBLIC_STREAM_API_KEY;
 const MAX_PARTICIPANTS = 2;
 
+// Audio-only, 2-person settings applied to every call we create.
+const AUDIO_SETTINGS_OVERRIDE = {
+  limits: { max_participants: MAX_PARTICIPANTS },
+  audio: { mic_default_on: true, default_device: 'speaker' },
+};
+
+function createClient(user) {
+  // getOrCreateInstance (not `new`) so call state survives backgrounding, and a
+  // server-minted token via tokenProvider so it refreshes on reconnect.
+  return StreamVideoClient.getOrCreateInstance({
+    apiKey: API_KEY,
+    user: { id: user.streamUserId, name: user.name },
+    tokenProvider: () => api.fetchToken(user.streamUserId),
+  });
+}
+
 export default function App() {
-  // screens: 'login' | 'home' | 'call'
-  const [screen, setScreen] = useState('login');
-  const [nameInput, setNameInput] = useState('');
-  const [userName, setUserName] = useState('');
+  const [booting, setBooting] = useState(true);
+  const [user, setUser] = useState(null);
   const [client, setClient] = useState(null);
-  const [call, setCall] = useState(null);
-  const [callCode, setCallCode] = useState('');
   const [busy, setBusy] = useState(false);
+  const [apiUrl, setApiUrlState] = useState(api.getApiBaseUrl());
   const clientRef = useRef(null);
 
-  const connectUser = useCallback(async () => {
-    const name = nameInput.trim();
-    if (!name) return;
-    if (!API_KEY || API_KEY === 'REPLACE_WITH_YOUR_STREAM_API_KEY') {
+  // Auto-login from storage so the same 3-digit ID persists across restarts.
+  useEffect(() => {
+    (async () => {
+      try {
+        // Apply a saved server-URL override before anything talks to the server.
+        const savedUrl = await loadApiUrl();
+        if (savedUrl) {
+          api.setApiBaseUrl(savedUrl);
+          setApiUrlState(api.getApiBaseUrl());
+        }
+        const saved = await loadUser();
+        if (saved && API_KEY) {
+          const c = createClient(saved);
+          clientRef.current = c;
+          setClient(c);
+          setUser(saved);
+        }
+      } finally {
+        setBooting(false);
+      }
+    })();
+  }, []);
+
+  // Update the directory server URL at runtime (no rebuild needed). The client's
+  // tokenProvider reads the URL lazily, so existing sessions pick this up too.
+  const handleSetApiUrl = useCallback(async (url) => {
+    const clean = (url || '').trim();
+    api.setApiBaseUrl(clean);
+    await saveApiUrl(clean);
+    setApiUrlState(api.getApiBaseUrl());
+  }, []);
+
+  const handleRegister = useCallback(async (name, email) => {
+    if (!API_KEY) {
       Alert.alert(
         'Missing API key',
-        'Set EXPO_PUBLIC_STREAM_API_KEY in .env (local dev) and eas.json (EAS builds). See README.'
+        'Set EXPO_PUBLIC_STREAM_API_KEY in .env (local) and eas.json (EAS builds).'
       );
       return;
     }
     setBusy(true);
     try {
-      const userId = nameToUserId(name);
-      const videoClient = StreamVideoClient.getOrCreateInstance({
-        apiKey: API_KEY,
-        user: { id: userId, name },
-        token: createDevToken(userId),
-      });
-      clientRef.current = videoClient;
-      setClient(videoClient);
-      setUserName(name);
-      setScreen('home');
+      const res = await api.register({ name, email });
+      const registered = {
+        id: res.id,
+        name: res.name,
+        email: email.trim(),
+        streamUserId: res.streamUserId,
+      };
+      await saveUser(registered);
+      const c = createClient(registered);
+      clientRef.current = c;
+      setClient(c);
+      setUser(registered);
     } catch (e) {
-      Alert.alert('Connection failed', e.message ?? String(e));
+      Alert.alert('Registration failed', e.message ?? String(e));
     } finally {
       setBusy(false);
     }
-  }, [nameInput]);
+  }, []);
 
+  // 1. Direct call by 3-digit ID -> rings the target phone.
+  const callById = useCallback(
+    async (targetId) => {
+      if (!clientRef.current || !user) return;
+      if (targetId === String(user.id)) {
+        Alert.alert("That's your own ID", 'Enter someone else’s ID to call them.');
+        return;
+      }
+      setBusy(true);
+      try {
+        const target = await api.lookupUser(targetId);
+        if (!target?.exists) {
+          Alert.alert('User not found', `No user with ID ${targetId}.`);
+          return;
+        }
+        const call = clientRef.current.call('default', randomRingCallId());
+        await call.getOrCreate({
+          ring: true,
+          data: {
+            members: [
+              { user_id: user.streamUserId },
+              { user_id: target.streamUserId },
+            ],
+            settings_override: AUDIO_SETTINGS_OVERRIDE,
+          },
+        });
+        // Caller auto-joins once the callee accepts; CallController shows the
+        // outgoing ringing UI in the meantime.
+      } catch (e) {
+        Alert.alert('Could not place call', e.message ?? String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [user]
+  );
+
+  // 2. Start a Call -> existing shareable 6-char code flow.
   const startCall = useCallback(async () => {
     if (!clientRef.current) return;
     setBusy(true);
     try {
       const code = generateCallCode();
-      const newCall = clientRef.current.call('default', codeToCallId(code));
-      await newCall.join({
+      const call = clientRef.current.call('default', codeToCallId(code));
+      await call.join({
         create: true,
-        data: {
-          settings_override: {
-            limits: { max_participants: MAX_PARTICIPANTS },
-            audio: { mic_default_on: true, default_device: 'speaker' },
-          },
-        },
+        data: { settings_override: AUDIO_SETTINGS_OVERRIDE },
       });
-      // Audio-only: make sure the camera stays off.
-      await newCall.camera.disable().catch(() => {});
-      setCall(newCall);
-      setCallCode(code);
-      setScreen('call');
+      await call.camera.disable().catch(() => {});
     } catch (e) {
       Alert.alert('Could not start call', e.message ?? String(e));
     } finally {
@@ -92,31 +167,25 @@ export default function App() {
     }
   }, []);
 
+  // 3. Join with Code -> existing flow.
   const joinCall = useCallback(async (code) => {
     if (!clientRef.current) return;
     const trimmed = code.trim();
     if (!trimmed) return;
     setBusy(true);
     try {
-      const existingCall = clientRef.current.call('default', codeToCallId(trimmed));
+      const call = clientRef.current.call('default', codeToCallId(trimmed));
+      await call.get(); // throws if the call doesn't exist
 
-      // Verify the call exists (throws if it doesn't).
-      await existingCall.get();
-
-      // Client-side guard for the 2-participant limit
-      // (the server-side limits.max_participants is the hard guarantee).
       const sessionParticipants =
-        existingCall.state.session?.participants?.length ?? 0;
+        call.state.session?.participants?.length ?? 0;
       if (sessionParticipants >= MAX_PARTICIPANTS) {
         Alert.alert('Call is full', 'This 1-to-1 call already has 2 participants.');
         return;
       }
 
-      await existingCall.join();
-      await existingCall.camera.disable().catch(() => {});
-      setCall(existingCall);
-      setCallCode(trimmed.toUpperCase());
-      setScreen('call');
+      await call.join();
+      await call.camera.disable().catch(() => {});
     } catch (e) {
       const msg = e.message ?? String(e);
       if (/does not exist|Can't find call|not found/i.test(msg)) {
@@ -131,53 +200,35 @@ export default function App() {
     }
   }, []);
 
-  const handleLeft = useCallback(() => {
-    setCall(null);
-    setCallCode('');
-    setScreen('home');
-  }, []);
-
   let content;
-  if (screen === 'login') {
+  if (booting) {
     content = (
-      <KeyboardAvoidingView
-        style={styles.loginContainer}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <Text style={styles.title}>Audio Call Demo</Text>
-        <Text style={styles.subtitle}>Powered by Stream - 1-to-1 audio calls</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="Your name"
-          placeholderTextColor="#6b7280"
-          value={nameInput}
-          onChangeText={setNameInput}
-          autoCorrect={false}
-          maxLength={30}
-        />
-        <TouchableOpacity
-          style={[styles.button, (!nameInput.trim() || busy) && styles.disabled]}
-          onPress={connectUser}
-          disabled={!nameInput.trim() || busy}
-        >
-          <Text style={styles.buttonText}>{busy ? 'Connecting...' : 'Continue'}</Text>
-        </TouchableOpacity>
-      </KeyboardAvoidingView>
+      <View style={styles.center}>
+        <ActivityIndicator color="#2563eb" size="large" />
+      </View>
     );
-  } else if (screen === 'home') {
+  } else if (!client || !user) {
     content = (
-      <HomeScreen
-        userName={userName}
-        onStartCall={startCall}
-        onJoinCall={joinCall}
+      <LoginScreen
+        onRegister={handleRegister}
         busy={busy}
+        apiUrl={apiUrl}
+        onSetApiUrl={handleSetApiUrl}
       />
     );
-  } else if (screen === 'call' && client && call) {
+  } else {
     content = (
-      <StreamCall call={call}>
-        <CallScreen code={callCode} onLeft={handleLeft} />
-      </StreamCall>
+      <StreamVideo client={client}>
+        <CallController
+          user={user}
+          onCallById={callById}
+          onStartCall={startCall}
+          onJoinCall={joinCall}
+          busy={busy}
+          apiUrl={apiUrl}
+          onSetApiUrl={handleSetApiUrl}
+        />
+      </StreamVideo>
     );
   }
 
@@ -185,7 +236,7 @@ export default function App() {
     <GestureHandlerRootView style={styles.root}>
       <SafeAreaView style={styles.root}>
         <StatusBar style="light" />
-        {client ? <StreamVideo client={client}>{content}</StreamVideo> : content}
+        {content}
       </SafeAreaView>
     </GestureHandlerRootView>
   );
@@ -193,30 +244,5 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#111827' },
-  loginContainer: { flex: 1, justifyContent: 'center', padding: 24 },
-  title: { color: '#f9fafb', fontSize: 32, fontWeight: '800', textAlign: 'center' },
-  subtitle: {
-    color: '#9ca3af',
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 40,
-  },
-  input: {
-    backgroundColor: '#1f2937',
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    color: '#f9fafb',
-    fontSize: 17,
-    marginBottom: 16,
-  },
-  button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  buttonText: { color: '#fff', fontSize: 17, fontWeight: '600' },
-  disabled: { opacity: 0.5 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });
